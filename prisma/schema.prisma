@@ -1,0 +1,327 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// FEATURE 1: REGULAR JOB POSTINGS
+// ==========================================
+
+model User {
+  id           String        @id
+  email        String        @unique
+  name         String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  jobs         Job[]
+  sourcingJobs SourcingJob[]
+
+  @@map("users")
+}
+
+model Job {
+  id                 String          @id @default(uuid())
+  userId             String
+  title              String
+  description        String?
+  jdFileUrl          String?
+  requiredSkills     String[]
+  experienceRequired String?
+  qualifications     String[]
+  status             String          @default("draft")
+  totalCandidates    Int             @default(0)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  candidates         Candidate[]
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  processingLogs     ProcessingLog[]
+
+  @@index([userId])
+  @@map("jobs")
+}
+
+model Candidate {
+  id                   String   @id @default(uuid())
+  jobId                String
+  name                 String
+  email                String?
+  phone                String?
+  resumeUrl            String
+  resumeText           String?
+  skills               String[]
+  experience           Json?
+  education            Json?
+  totalExperienceYears Int?
+  matchScore           Int?
+  matchedSkills        String[]
+  missingSkills        String[]
+  fitVerdict           String?
+  summary              String?
+  strengths            String[]
+  weaknesses           String[]
+  processingStatus     String   @default("pending")
+  processingError      String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  resumePath           String
+  job                  Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([matchScore])
+  @@map("candidates")
+}
+
+model ProcessingLog {
+  id               String    @id @default(uuid())
+  jobId            String
+  status           String
+  totalResumes     Int?
+  processedResumes Int       @default(0)
+  failedResumes    Int       @default(0)
+  errorMessage     String?
+  startedAt        DateTime  @default(now())
+  completedAt      DateTime?
+  job              Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("processing_logs")
+}
+
+// ==========================================
+// FEATURE 2: LINKEDIN SOURCING
+// ==========================================
+
+enum SourcingJobStatus {
+  CREATED
+  FORMATTING_JD
+  JD_FORMATTED
+  SEARCHING_PROFILES
+  PROFILES_FOUND
+  SCRAPING_PROFILES
+  PARSING_PROFILES
+  SAVING_PROFILES
+  SCORING_PROFILES
+  COMPLETED
+  RATE_LIMITED
+  FAILED
+}
+
+model SourcingJob {
+  id                    String              @id @default(cuid())
+  userId                String
+  title                 String
+  rawJobDescription     String              @db.Text
+  maxCandidates         Int                 @default(50)
+  
+  // Job Requirements
+  jobRequirements       Json?
+  
+  // === CHECKPOINT DATA (for resume support) ===
+  searchFilters         Json?               // Stage 1: Format JD
+  discoveredUrls        Json?               // Stage 2: Search
+  enrichedUrls          Json?               //  Stage 3: All enrichment attempts (success + failure)
+  scrapedProfilesData   Json?               // Stage 4: Scrape
+  parsedProfilesData    Json?               // Stage 5: Parse
+  
+  // === PROGRESS TRACKING (for SSE UI) ===
+  status                SourcingJobStatus   @default(CREATED)
+  currentStage          String?
+  totalProfilesFound    Int                 @default(0)
+  profilesScraped       Int                 @default(0)
+  profilesParsed        Int                 @default(0)
+  profilesSaved         Int                 @default(0)
+  profilesScored        Int                 @default(0)
+
+  lastCompletedStage    String?  
+  
+  // === RATE LIMITING ===
+  rateLimitHitAt        DateTime?
+  rateLimitResetAt      DateTime?
+  rateLimitService      String?              // "salesql" | "apify_search" | "apify_scrape"
+  
+  // === ERROR HANDLING ===
+  errorMessage          String?             @db.Text
+  failedAt              DateTime?
+  retryCount            Int                 @default(0)
+  maxRetries            Int                 @default(3)
+  
+  // === TIMESTAMPS ===
+  processingStartedAt   DateTime?
+  lastActivityAt        DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  completedAt           DateTime?
+  
+  // Relations
+  candidates            LinkedInCandidate[]
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, status])
+  @@index([lastActivityAt])
+  @@index([status, lastActivityAt])
+}
+
+// ============================================
+// NEW ENUM: Interview Readiness Status
+// ============================================
+
+enum InterviewReadinessStatus {
+  NOT_ASSESSED           // Initial state
+  READY_TO_INTERVIEW     // Green light
+  INTERVIEW_WITH_VALIDATION  // Yellow - worth interviewing but validate concerns
+  NOT_RECOMMENDED        // Red - significant gaps
+}
+
+enum CandidateEnrichmentStatus {
+  PENDING
+  ENRICHED
+  NO_EMAIL_FOUND
+  SKIPPED
+}
+
+
+model LinkedInCandidate {
+  id                String        @id @default(cuid())
+  sourcingJobId     String
+  
+  // === PROFILE INFO ===
+  fullName          String
+  headline          String?
+  location          String?
+  profileUrl        String
+  photoUrl          String?
+  linkedInId        String?       // LinkedIn's internal ID
+  publicIdentifier  String?       // LinkedIn username (e.g., "john-doe-123")
+  
+  // === CURRENT ROLE ===
+  currentPosition   String?
+  currentCompany    String?
+  currentCompanyLogo String?      // Company logo URL
+  currentJobDuration String?      // "2 yrs 3 mos"
+  experienceYears   Int?          // Total years of experience
+  
+  // === DETAILED EXPERIENCE ===
+  skills            Json?         // Array of skill objects: [{name, endorsements?}]
+  experience        Json?         // Array of work history
+  education         Json?         // Array of education
+  certifications    Json?         // NEW: Array of certifications
+  languages         Json?         // NEW: Array of languages
+  
+  // === CONTACT INFO ===
+  email             String?
+  phone             String?
+  hasContactInfo    Boolean       @default(false)
+
+    // === ENRICHMENT FIELDS (new) ===
+  enrichmentStatus       CandidateEnrichmentStatus @default(PENDING)
+  enrichedAt             DateTime?
+  emailSource            String?        // "salesql" or "scraped"
+  
+  // === SCRAPING STATUS (new) ===
+  scrapingStatus         String?        // "PENDING", "SCRAPED", "FAILED"
+  scrapedAt              DateTime?
+  
+  // === LINKEDIN PROFILE STATS ===
+  connections       Int?          // Number of connections
+  followers         Int?          // Number of followers
+  isPremium         Boolean       @default(false)
+  isVerified        Boolean       @default(false)
+  isOpenToWork      Boolean       @default(false)
+  
+  // === STRUCTURED SCORING (100 points total) ===
+  matchScore        Float         @default(0)      // Total (0-100)
+  skillsScore       Float         @default(0)      // 0-30 (Required skills match)
+  experienceScore   Float         @default(0)      // 0-25 (Experience level)
+  industryScore     Float         @default(0)      // 0-20 (Industry relevance)
+  titleScore        Float         @default(0)      // 0-15 (Title/seniority fit)
+  niceToHaveScore   Float         @default(0)      // 0-10 (Bonus skills)
+  matchReason       String?       @db.Text          // AI-generated reasoning
+  
+  // === SKILL MATCHING DETAILS (For recruiters to see) ===
+  matchedSkills     Json?         // NEW: Array of matched required skills
+  missingSkills     Json?         // NEW: Array of missing required skills
+  bonusSkills       Json?         // NEW: Array of matched nice-to-have skills
+  
+  // === EXPERIENCE INSIGHTS ===
+  relevantYears     Int?          // NEW: Years of RELEVANT experience (vs total)
+  seniorityLevel    String?       // NEW: "Entry", "Mid", "Senior", "Lead", "Executive"
+  industryMatch     String?       // NEW: Specific industry from their background
+  
+  // === SCORING METADATA ===
+  isScored          Boolean       @default(false)
+  scoringVersion    String?       // NEW: Track which scoring version was used
+  
+  // === DEDUPLICATION ===
+  isDuplicate       Boolean       @default(false)
+  firstSeenJobId    String?
+  duplicateCount    Int           @default(0)      // NEW: How many times seen
+  
+  // === METADATA ===
+  batchNumber       Int           @default(0)
+  rawData           Json?         // Store full raw data for debugging
+  scoredAt          DateTime?
+  updatedAt         DateTime      @updatedAt
+
+
+
+  // Primary decision field (most important)
+  interviewReadiness        InterviewReadinessStatus @default(NOT_ASSESSED)
+  interviewReadinessReason  String?           @db.Text  // AI-generated reasoning
+  interviewConfidenceScore  Float?            @default(0) // 0-100 confidence in recommendation
+  
+  // Quick summary for recruiters
+  candidateSummary          String?           @db.Text  // 2-3 sentence AI summary
+  keyStrengths              Json?             // Array of top 3 strengths
+  
+  // ============================================
+  //  NEW: SKILL ANALYSIS ENHANCEMENT
+  // ============================================
+  
+  
+  skillsProficiency         Json?             // { skill: proficiencyLevel (1-5) }
+  criticalGaps              Json?             // Array of most important missing skills
+  skillGapImpact            String?           // "High", "Medium", "Low"
+  skillsAnalysisSummary     String?           @db.Text  // AI narrative
+  
+  // ============================================
+  //  NEW: EXPERIENCE ANALYSIS ENHANCEMENT
+  // ============================================
+  
+  
+  experienceRelevanceScore  Float?            @default(0) // 0-100
+  seniorityAlignment        String?           // "Perfect", "Higher", "Lower", "Unclear"
+  industryAlignment         String?           // "Exact", "Adjacent", "Different"
+  experienceHighlights      Json?             // Array of most relevant roles
+  experienceAnalysisSummary String?           @db.Text  // AI narrative
+  
+  
+  hasSignificantGaps        Boolean           @default(false)
+  gapsAndTradeoffs          Json?           
+
+  gapsOverallImpact         String?         
+  gapsSummary               String?           @db.Text  // AI narrative
+  
+  
+  interviewFocusAreas       Json?             // Array of focus areas
+  suggestedQuestions        Json?             // Array of specific interview questions
+  redFlags                  Json?             // Array of concerns to probe
+  interviewFocusSummary     String?           @db.Text  // AI narrative
+  
+  
+  aiAnalysisVersion         String?           @default("v3.0") // Track version
+  fullAnalysisGenerated     Boolean           @default(false)  // Flag for new analysis
+  analysisGeneratedAt       DateTime?       
+  
+  // Relations
+  sourcingJob       SourcingJob   @relation(fields: [sourcingJobId], references: [id], onDelete: Cascade)
+  
+  @@unique([sourcingJobId, profileUrl])
+  @@index([sourcingJobId, matchScore(sort: Desc)])
+  @@index([profileUrl])
+  @@index([batchNumber])
+  @@index([seniorityLevel])
+  @@index([isOpenToWork])
+}
