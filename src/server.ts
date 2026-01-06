@@ -19,6 +19,10 @@ import cronRouter from './routes/cron';
 import streamRouter from './routes/stream';
 import retryRouter from './routes/retry';
 import processRouter from './routes/process';
+import creditsRouter from './routes/credits';
+import plansRouter from './routes/plans';
+import subscriptionsRouter from './routes/subscriptions';
+import webhooksRouter from './routes/webhooks';
 
 const app: Application = express();
 const PORT = process.env.PORT || 8000;
@@ -87,6 +91,9 @@ app.get('/', (req, res) => {
       jobs: '/api/jobs',
       sourcing: '/api/sourcing',
       candidates: '/api/candidates',
+      credits: '/api/credits',
+      plans: '/api/plans',
+      subscriptions: '/api/subscriptions',
       upload: '/api/upload',
       export: '/api/export',
       process: '/api/process/:jobId',
@@ -110,6 +117,14 @@ app.use('/api/sourcing', sourcingRouter);
 app.use('/api/sourcing/stream', streamRouter);
 app.use('/api/sourcing/retry', retryRouter);
 app.use('/api/cron', cronRouter);
+
+// Credit System Routes
+app.use('/api/credits', creditsRouter);
+app.use('/api/plans', plansRouter);
+app.use('/api/subscriptions', subscriptionsRouter);
+
+// Webhooks (no auth - verified by signature)
+app.use('/api/webhooks', webhooksRouter);
 
 
 // ============================

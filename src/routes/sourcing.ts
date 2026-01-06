@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma";
 import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
+import { checkSourcingCredits } from "../middleware/creditCheck";
 import { z } from "zod";
 import { createSourcingWorkflow } from "../lib/sourcing/workflow";
 
@@ -15,7 +16,7 @@ const createSourcingJobSchema = z.object({
 });
 
 // POST /api/sourcing - Create new sourcing job
-router.post("/", requireAuth, async (req: AuthenticatedRequest, res, next) => {
+router.post("/", requireAuth, checkSourcingCredits, async (req: AuthenticatedRequest, res, next) => {
   try {
     const { userId } = req;
 

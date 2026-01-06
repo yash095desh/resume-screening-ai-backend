@@ -3,6 +3,8 @@ import { RateLimitError } from "../../errors/rate-limit-error";
 import { prisma } from "../../prisma";
 import type { SourcingState } from "../state";
 import { any } from "zod";
+import { creditService } from "../../../services/credit.service";
+import { CreditCategory } from "@prisma/client";
 
 interface SalesQLEmail {
   email: string;
@@ -293,6 +295,22 @@ export async function enrichAndCreateCandidates(state: SourcingState) {
 
           created++;
           foundWithEmail++;
+
+          // Deduct 1 sourcing credit for successful candidate creation
+          try {
+            await creditService.deductCredits(
+              state.userId,
+              CreditCategory.SOURCING,
+              1,
+              state.jobId,
+              'SOURCING_JOB',
+              `Candidate sourcing: ${salesqlData?.full_name || profile.fullName}`
+            );
+          } catch (creditError: any) {
+            console.error(`   ⚠️ Failed to deduct credits:`, creditError.message);
+            // Continue processing but log the error
+          }
+
           console.log(
             `   ✓ Enriched: ${salesqlData?.full_name || profile.fullName}`
           );

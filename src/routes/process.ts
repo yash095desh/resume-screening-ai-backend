@@ -1,16 +1,19 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
+import { checkScreeningCredits } from '../middleware/creditCheck';
 import { parseResumeBuffer } from '../lib/utils/file-parser';
 import { processResumeCombined, JobRequirements } from '../lib/ai/resume-processor';
 import { getSupabaseFile } from '../lib/storage/supabase';
+import { creditService } from '../services/credit.service';
+import { CreditCategory } from '@prisma/client';
 
 const router = Router({ mergeParams: true });
 
 // -------------------------
 // POST: PROCESS RESUMES (OPTIMIZED)
 // -------------------------
-router.post('/:jobId', requireAuth, async (req: AuthenticatedRequest, res, next) => {
+router.post('/:jobId', requireAuth, checkScreeningCredits, async (req: AuthenticatedRequest, res, next) => {
   let processingLog: any = null;
 
   try {
@@ -188,6 +191,23 @@ router.post('/:jobId', requireAuth, async (req: AuthenticatedRequest, res, next)
         );
 
         processedCount += successfulUpdates.length;
+
+        // Deduct screening credits for each successfully processed candidate
+        for (const { candidate } of successfulUpdates) {
+          try {
+            await creditService.deductCredits(
+              userId!,
+              CreditCategory.SCREENING,
+              1,
+              jobId,
+              'JOB',
+              `Resume screening for candidate ${candidate.id}`
+            );
+          } catch (creditError: any) {
+            console.error(`⚠️ Failed to deduct screening credit:`, creditError.message);
+            // Don't fail the entire batch, just log the error
+          }
+        }
 
         // OPTIMIZATION 6: Handle failures
         const failures = aiResults
