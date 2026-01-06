@@ -42,22 +42,22 @@ export async function extractJDRequirements(jdText: string) {
 
 const ResumeSchema = z.object({
   name: z.string().describe('Candidate full name'),
-  email: z.string().optional().describe('Email address'),
-  phone: z.string().optional().describe('Phone number'),
+  email: z.string().nullable().describe('Email address'),
+  phone: z.string().nullable().describe('Phone number'),
   skills: z.array(z.string()).describe('Technical and soft skills'),
   experience: z.array(
     z.object({
       company: z.string(),
       role: z.string(),
       duration: z.string(),
-      description: z.string().optional(),
+      description: z.string().nullable(),
     })
   ).describe('Work experience history'),
   education: z.array(
     z.object({
       degree: z.string(),
       institution: z.string(),
-      year: z.string().optional(),
+      year: z.string().nullable(),
     })
   ).describe('Educational background'),
   totalExperienceYears: z.number().describe('Total years of professional experience'),
@@ -68,6 +68,11 @@ export async function extractResumeInfo(resumeText: string) {
     const { object } = await generateObject({
       model: openai("gpt-4o-mini"),
       schema: ResumeSchema,
+      providerOptions: {
+                    openai: {
+                      strictJsonSchema: false,
+                    } satisfies OpenAIChatLanguageModelOptions,
+                  },
       prompt: `
         Extract structured information from this resume:
 

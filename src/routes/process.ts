@@ -2,19 +2,17 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 import { parseResumeBuffer } from '../lib/utils/file-parser';
-import { extractResumeInfo } from '../lib/ai/parser';
-import { calculateMatchScore } from '../lib/ai/matcher';
-import { generateCandidateSummary } from '../lib/ai/scorer';
+import { processResumeCombined, JobRequirements } from '../lib/ai/resume-processor';
 import { getSupabaseFile } from '../lib/storage/supabase';
 
 const router = Router({ mergeParams: true });
 
 // -------------------------
-// POST: PROCESS RESUMES
+// POST: PROCESS RESUMES (OPTIMIZED)
 // -------------------------
 router.post('/:jobId', requireAuth, async (req: AuthenticatedRequest, res, next) => {
   let processingLog: any = null;
-  
+
   try {
     const { jobId } = req.params;
     const { userId } = req;
@@ -54,129 +52,204 @@ router.post('/:jobId', requireAuth, async (req: AuthenticatedRequest, res, next)
     let processedCount = 0;
     let failedCount = 0;
 
-    const BATCH_SIZE = 5;
+    // OPTIMIZATION: Increased batch size for better throughput (12 vs 5)
+    const BATCH_SIZE = 12;
+
+    // Prepare job requirements for batch processing
+    const jobRequirements: JobRequirements = {
+      requiredSkills: job.requiredSkills || [],
+      experienceRequired: job.experienceRequired || '0',
+      qualifications: job.qualifications || [],
+    };
 
     for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
       const batch = candidates.slice(i, i + BATCH_SIZE);
 
-      await Promise.all(
-        batch.map(async (candidate: any) => {
-          try {
-            // Validate resumePath exists
+      console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(candidates.length / BATCH_SIZE)} (${batch.length} candidates)`);
+
+      try {
+        // OPTIMIZATION 1: Mark all candidates as processing in parallel
+        await Promise.all(
+          batch.map((candidate) =>
+            prisma.candidate.update({
+              where: { id: candidate.id },
+              data: { processingStatus: 'processing' },
+            })
+          )
+        );
+
+        // OPTIMIZATION 2: Pre-fetch all files in parallel
+        console.log('Fetching files in parallel...');
+        const fileResults = await Promise.allSettled(
+          batch.map(async (candidate) => {
             if (!candidate.resumePath) {
               throw new Error('Resume path is missing');
             }
 
-            await prisma.candidate.update({
-              where: { id: candidate.id },
-              data: { processingStatus: 'processing' },
-            });
-
-            // ------ FETCH FILE FROM SUPABASE ------
             const { buffer: fileBuffer, mimeType } = await getSupabaseFile(
               candidate.resumePath
             );
 
-            console.log('Parsing resume:', {
-              id: candidate.id,
+            return {
+              candidateId: candidate.id,
+              buffer: fileBuffer,
               mimeType,
               resumePath: candidate.resumePath,
-            });
+            };
+          })
+        );
 
-            // ------ PARSE USING YOUR PARSER ------
-            const resumeText = await parseResumeBuffer(
-              fileBuffer,
-              mimeType,
-              candidate.resumePath
-            );
+        // OPTIMIZATION 3: Parse all files in parallel
+        console.log('Parsing files in parallel...');
+        const parseResults = await Promise.allSettled(
+          fileResults.map(async (result, idx) => {
+            if (result.status === 'rejected') {
+              throw result.reason;
+            }
+
+            const { candidateId, buffer, mimeType, resumePath } = result.value;
+
+            const resumeText = await parseResumeBuffer(buffer, mimeType, resumePath);
 
             if (!resumeText || resumeText.trim().length === 0) {
-              console.warn('Empty text returned for:', candidate.resumePath);
               throw new Error('Resume parsing returned empty text');
             }
 
-            // ------ EXTRACT USING AI ------
-            const candidateInfo = await extractResumeInfo(resumeText);
+            return {
+              candidateId,
+              resumeText,
+            };
+          })
+        );
 
-            // Validate candidateInfo
-            if (!candidateInfo.name) {
-              throw new Error('Could not extract candidate name from resume');
+        // OPTIMIZATION 4: Process all resumes with AI in parallel (combined extraction + analysis)
+        console.log('Processing with AI in parallel (combined extraction + summary)...');
+        const aiResults = await Promise.allSettled(
+          parseResults.map(async (result) => {
+            if (result.status === 'rejected') {
+              throw result.reason;
             }
 
-            const matchResult = calculateMatchScore(
-              candidateInfo.skills || [],
-              job.requiredSkills || [],
-              candidateInfo.totalExperienceYears || 0,
-              job.experienceRequired || '0'
+            const { candidateId, resumeText } = result.value;
+
+            // Single AI call for extraction + analysis (50% fewer API calls!)
+            const processedResult = await processResumeCombined(
+              resumeText,
+              jobRequirements
             );
 
-            const summary = await generateCandidateSummary(
-              candidateInfo,
-              {
-                requiredSkills: job.requiredSkills || [],
-                experienceRequired: job.experienceRequired || '0',
-                qualifications: job.qualifications || [],
-              },
-              matchResult.score
-            );
+            return {
+              candidateId,
+              resumeText,
+              ...processedResult,
+            };
+          })
+        );
 
-            // ------ UPDATE CANDIDATE ------
-            await prisma.candidate.update({
+        // OPTIMIZATION 5: Batch update all successful candidates
+        const successfulUpdates = aiResults
+          .map((result, idx) => ({
+            result,
+            candidate: batch[idx],
+          }))
+          .filter((item) => item.result.status === 'fulfilled')
+          .map((item) => ({
+            candidate: item.candidate,
+            data: (item.result as PromiseFulfilledResult<any>).value,
+          }));
+
+        console.log(`Updating ${successfulUpdates.length} successful candidates...`);
+
+        await Promise.all(
+          successfulUpdates.map(({ candidate, data }) =>
+            prisma.candidate.update({
               where: { id: candidate.id },
               data: {
-                name: candidateInfo.name,
-                email: candidateInfo.email || null,
-                phone: candidateInfo.phone || null,
-                resumeText,
-                skills: candidateInfo.skills || [],
-                experience: candidateInfo.experience as any,
-                education: candidateInfo.education as any,
-                totalExperienceYears: candidateInfo.totalExperienceYears || 0,
-                matchScore: matchResult.score,
-                matchedSkills: matchResult.matchedSkills || [],
-                missingSkills: matchResult.missingSkills || [],
-                fitVerdict: summary.fitVerdict,
-                summary: summary.summary,
-                strengths: summary.strengths || [],
-                weaknesses: summary.weaknesses || [],
+                name: data.name,
+                email: data.email,
+                phone: data.phone,
+                resumeText: data.resumeText,
+                skills: data.skills,
+                experience: data.experience as any,
+                education: data.education as any,
+                totalExperienceYears: data.totalExperienceYears,
+                matchScore: data.matchScore,
+                matchedSkills: data.matchedSkills,
+                missingSkills: data.missingSkills,
+                fitVerdict: data.fitVerdict,
+                summary: data.summary,
+                strengths: data.strengths,
+                weaknesses: data.weaknesses,
                 processingStatus: 'completed',
                 updatedAt: new Date(),
               },
-            });
+            })
+          )
+        );
 
-            processedCount++;
+        processedCount += successfulUpdates.length;
 
-            await prisma.processingLog.update({
-              where: { id: processingLog.id },
-              data: {
-                processedResumes: processedCount,
-                status: 'in_progress',
-              },
-            });
-          } catch (err: any) {
-            failedCount++;
+        // OPTIMIZATION 6: Handle failures
+        const failures = aiResults
+          .map((result, idx) => ({
+            result,
+            candidate: batch[idx],
+          }))
+          .filter((item) => item.result.status === 'rejected');
 
-            console.error('Error processing candidate:', candidate.id, err);
+        if (failures.length > 0) {
+          console.log(`Handling ${failures.length} failed candidates...`);
 
-            await prisma.candidate.update({
+          await Promise.all(
+            failures.map(({ candidate, result }) =>
+              prisma.candidate.update({
+                where: { id: candidate.id },
+                data: {
+                  processingStatus: 'failed',
+                  processingError:
+                    (result as PromiseRejectedResult).reason?.message || 'Processing failed',
+                },
+              })
+            )
+          );
+
+          failedCount += failures.length;
+        }
+
+        // OPTIMIZATION 7: Single processing log update per batch (vs per candidate)
+        await prisma.processingLog.update({
+          where: { id: processingLog.id },
+          data: {
+            processedResumes: processedCount,
+            failedResumes: failedCount,
+            status: 'in_progress',
+          },
+        });
+
+        console.log(`Batch completed: ${processedCount} processed, ${failedCount} failed`);
+
+      } catch (batchErr: any) {
+        console.error('Critical batch error:', batchErr);
+
+        // Mark all candidates in this batch as failed
+        await Promise.all(
+          batch.map((candidate) =>
+            prisma.candidate.update({
               where: { id: candidate.id },
               data: {
                 processingStatus: 'failed',
-                processingError: err?.message || 'Processing failed',
+                processingError: batchErr?.message || 'Batch processing failed',
               },
-            });
+            })
+          )
+        );
 
-            await prisma.processingLog.update({
-              where: { id: processingLog.id },
-              data: { failedResumes: failedCount },
-            });
-          }
-        })
-      );
+        failedCount += batch.length;
+      }
 
-      // Add delay between batches (except after last batch)
+      // OPTIMIZATION 8: Reduced delay between batches (500ms vs 2000ms)
       if (i + BATCH_SIZE < candidates.length) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
 
@@ -205,9 +278,9 @@ router.post('/:jobId', requireAuth, async (req: AuthenticatedRequest, res, next)
       try {
         await prisma.processingLog.update({
           where: { id: processingLog.id },
-          data: { 
-            status: 'failed', 
-            completedAt: new Date() 
+          data: {
+            status: 'failed',
+            completedAt: new Date()
           },
         });
       } catch (logError) {

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
+import { extractJDRequirements } from '../lib/ai/parser';
 
 const router = Router();
 
@@ -13,14 +14,22 @@ router.post('/', requireAuth, async (req: AuthenticatedRequest, res, next) => {
       return res.status(400).json({ error: 'Title and description are required' });
     }
 
+    console.log('Extracting job requirements using AI...');
+
+    // Use AI to extract structured requirements from job description
+    const extractedRequirements = await extractJDRequirements(description);
+
+    console.log('Extracted requirements:', extractedRequirements);
+
+    // Create job with AI-extracted requirements
     const job = await prisma.job.create({
       data: {
         userId: userId!,
         title,
         description,
-        requiredSkills: [],
-        experienceRequired: '',
-        qualifications: [],
+        requiredSkills: extractedRequirements.requiredSkills || [],
+        experienceRequired: extractedRequirements.experienceRequired || '',
+        qualifications: extractedRequirements.qualifications || [],
         status: 'draft',
       },
     });

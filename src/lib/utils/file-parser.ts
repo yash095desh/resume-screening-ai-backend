@@ -1,21 +1,5 @@
 import mammoth from "mammoth";
-import { UnstructuredClient  } from "unstructured-client";
-
-// -------------------------
-// UNSTRUCTURED CLIENT
-// -------------------------
-
-const unstructuredApiUrl = process.env.UNSTRUCTURED_API_URL;
-const unstructuredApiKey = process.env.UNSTRUCTURED_API_KEY;
-
-if (!unstructuredApiUrl || !unstructuredApiKey) {
-  console.warn("Unstructured API credentials not configured");
-}
-
-const client = new UnstructuredClient({
-  serverURL: unstructuredApiUrl,
-  security: { apiKeyAuth: unstructuredApiKey },
-});
+import { PDFParse } from "pdf-parse";
 
 // -------------------------
 // CONSTANTS
@@ -36,8 +20,8 @@ const MAX_FILE_SIZE_MB = 5;
 /**
  * Parses a resume buffer and extracts text content
  * - DOC/DOCX files are processed using Mammoth
- * - PDF files are processed using Unstructured API (high-res)
- * 
+ * - PDF files are processed using pdf-parse library
+ *
  * @param file - File buffer to parse
  * @param mimeType - MIME type of the file
  * @param fileName - Optional file name for logging/API calls
@@ -112,7 +96,7 @@ async function parseWordDocument(file: Buffer): Promise<string> {
 // -------------------------
 
 /**
- * Parses PDF files using Unstructured API with high-resolution strategy
+ * Parses PDF files using pdf-parse library
  * @param file - File buffer
  * @param fileName - Optional file name
  * @returns Extracted text content
@@ -121,43 +105,34 @@ async function parsePdfDocument(
   file: Buffer,
   fileName?: string
 ): Promise<string> {
+  let parser: PDFParse | null = null;
+
   try {
-    if (!unstructuredApiUrl || !unstructuredApiKey) {
-      throw new Error("Unstructured API not configured");
-    }
+    console.log("Parsing PDF with pdf-parse:", { fileName, size: file.length });
 
-    const response = await client.general.partition({
-      partitionParameters: {
-        files: {
-          content: file,
-          fileName: fileName || "resume.pdf",
-        },
-        languages: ["eng"],
-      },
-    });
-
-    if (!response) {
-      throw new Error("No response from Unstructured API");
-    }
-
-    const elements = response;
-
-    // Extract text from all elements
-    const text = Array.isArray(elements)
-      ? elements
-          .map((el: any) => el.text?.trim())
-          .filter(Boolean)
-          .join("\n")
-      : "";
+    // Create parser instance and extract text
+    parser = new PDFParse({ data: file });
+    const result = await parser.getText();
+    const text = result.text;
 
     if (!text || text.trim().length === 0) {
       throw new Error("No text content extracted from PDF");
     }
 
+    console.log("PDF parsed successfully:", {
+      fileName,
+      extractedLength: text.length,
+    });
+
     return text.trim();
   } catch (err: any) {
     console.error("parsePdfDocument error:", err);
     throw new Error(`Failed to parse PDF: ${err?.message}`);
+  } finally {
+    // Always destroy the parser to free memory
+    if (parser) {
+      await parser.destroy();
+    }
   }
 }
 
