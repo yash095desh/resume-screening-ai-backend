@@ -127,6 +127,18 @@ export async function buildResumeState(jobId: string) {
 
   const discoveredUrlsArray = (job.discoveredUrls as string[]) || [];
   const enrichedUrlsArray = (job.enrichedUrls as string[]) || [];
+  const usedQueryIndicesArray = (job.usedQueryIndices as number[]) || [];
+
+  // ✅ Handle searchFiltersVariants (can be array or single object)
+  const searchFiltersData = job.searchFilters as any;
+  let searchFiltersVariants = [];
+
+  if (Array.isArray(searchFiltersData)) {
+    searchFiltersVariants = searchFiltersData;
+  } else if (searchFiltersData) {
+    // Old format: convert single object to array
+    searchFiltersVariants = [searchFiltersData];
+  }
 
   const pendingUrls = discoveredUrlsArray.filter(
     (url) => !enrichedUrlsArray.includes(url)
@@ -137,9 +149,11 @@ export async function buildResumeState(jobId: string) {
   console.log(
     `   - Candidates with emails: ${candidatesWithEmails}/${job.maxCandidates}`
   );
+  console.log(`   - Search filter variants: ${searchFiltersVariants.length}`);
   console.log(`   - Discovered URLs: ${discoveredUrlsArray.length}`);
   console.log(`   - Enriched URLs: ${enrichedUrlsArray.length}`);
   console.log(`   - Pending URLs: ${pendingUrls.length}`);
+  console.log(`   - Used queries: ${usedQueryIndicesArray.length}`);
 
   const estimatedIterations = Math.max(
     Math.floor(candidatesWithEmails / 10),
@@ -153,9 +167,11 @@ export async function buildResumeState(jobId: string) {
     jobRequirements: job.jobRequirements,
     maxCandidates: job.maxCandidates,
 
-    searchFilters: job.searchFilters,
+    searchFilters: searchFiltersVariants.length > 0 ? searchFiltersVariants[0] : job.searchFilters,
+    searchFiltersVariants: searchFiltersVariants, // ✅ Load AI-generated variants
     discoveredUrls: new Set(discoveredUrlsArray),
     enrichedUrls: new Set(enrichedUrlsArray), // ✅ Load into state
+    usedQueryIndices: new Set(usedQueryIndicesArray), // ✅ Load query usage tracking
     scrapedProfiles: job.scrapedProfilesData || [],
     parsedProfiles: job.parsedProfilesData || [],
 

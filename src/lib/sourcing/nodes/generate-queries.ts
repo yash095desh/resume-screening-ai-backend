@@ -3,133 +3,71 @@
 import { prisma } from "../../prisma";
 import type { SourcingState } from "../state";
 
+/**
+ * Generate tiered queries from AI-generated search filter variants
+ * For each variant, creates: Tier 1 (precise), Tier 2 (broad), Tier 3 (alternative)
+ */
 export async function generateSearchQueries(state: SourcingState) {
-  console.log("🔍 Generating search strategies...");
+  console.log("🔍 Generating tiered queries from AI-generated variants...");
 
   try {
-    // ✅ STEP 1: Check state first
-    let searchFilters = state.searchFilters;
+    // ✅ STEP 1: Get searchFiltersVariants from state
+    let searchFiltersVariants = state.searchFiltersVariants;
 
     // ✅ STEP 2: If not in state, get from database
-    if (!searchFilters) {
-      console.log("📂 searchFilters not in state, checking database...");
+    if (!searchFiltersVariants || searchFiltersVariants.length === 0) {
+      console.log("📂 searchFiltersVariants not in state, checking database...");
       const job = await prisma.sourcingJob.findUnique({
         where: { id: state.jobId },
-        select: { 
+        select: {
           searchFilters: true,
-          lastCompletedStage: true 
+          lastCompletedStage: true
         },
       });
-      
-      searchFilters = job?.searchFilters as any;
-      
+
+      const searchFiltersData = job?.searchFilters as any;
+
+      // Handle both new format (array) and old format (single object)
+      if (Array.isArray(searchFiltersData)) {
+        searchFiltersVariants = searchFiltersData;
+        console.log(`♻️ Found ${searchFiltersVariants.length} variants in database`);
+      } else if (searchFiltersData) {
+        // Old format: convert single object to array
+        searchFiltersVariants = [searchFiltersData];
+        console.log("♻️ Found legacy format, converted to 1 variant");
+      }
+
       // ✅ STEP 3: Skip if already completed
-      if (job?.lastCompletedStage === "generate_queries" && searchFilters) {
-        console.log("♻️ Queries already generated, skipping");
-        
-        // Reconstruct queries from filters
-        const meta = (searchFilters as any)._meta || {};
-        const queries = [];
-        
-        // Precise strategy
-        queries.push({
-          type: "precise",
-          searchQuery: (searchFilters as any).searchQuery,
-          currentJobTitles: (searchFilters as any).currentJobTitles,
-          locations: (searchFilters as any).locations,
-          industryIds: (searchFilters as any).industryIds,
-          yearsOfExperienceIds: (searchFilters as any).yearsOfExperienceIds,
-          seniorityLevelIds: (searchFilters as any).seniorityLevelIds,
-          maxItems: state.maxCandidates,
-          takePages: (searchFilters as any).takePages,
-        });
-        
-        // Broad strategy
-        queries.push({
-          type: "broad",
-          searchQuery: (searchFilters as any).searchQuery,
-          currentJobTitles: (searchFilters as any).currentJobTitles?.slice(0, 3),
-          locations: (searchFilters as any).locations,
-          yearsOfExperienceIds: (searchFilters as any).yearsOfExperienceIds,
-          seniorityLevelIds: (searchFilters as any).seniorityLevelIds,
-          maxItems: state.maxCandidates,
-          takePages: (searchFilters as any).takePages,
-        });
-        
-        // Alternative strategy
-        if (meta.niceToHaveSkills && meta.niceToHaveSkills.length > 0) {
-          const alternativeQuery = meta.niceToHaveSkills.slice(0, 3).join(" AND ");
-          queries.push({
-            type: "alternative",
-            searchQuery: alternativeQuery,
-            currentJobTitles: (searchFilters as any).currentJobTitles,
-            locations: (searchFilters as any).locations,
-            yearsOfExperienceIds: (searchFilters as any).yearsOfExperienceIds,
-            seniorityLevelIds: (searchFilters as any).seniorityLevelIds,
-            maxItems: state.maxCandidates,
-            takePages: (searchFilters as any).takePages,
-          });
-        }
-        
+      if (job?.lastCompletedStage === "generate_queries" && searchFiltersVariants && searchFiltersVariants.length > 0) {
+        console.log("♻️ Queries already generated, reconstructing from variants");
+
+        // Regenerate queries from variants (same logic as below)
+        const queries = generateQueriesFromVariants(searchFiltersVariants, state.maxCandidates);
+
+        console.log(`♻️ Reconstructed ${queries.length} queries from ${searchFiltersVariants.length} variants`);
+
         return {
-          searchFilters: searchFilters,
+          searchFiltersVariants: searchFiltersVariants,
           searchQueries: queries,
-          currentQueryIndex: 0,
-          searchAttempts: 0,
           currentStage: "QUERY_GENERATED",
         };
       }
     }
 
-    if (!searchFilters) {
-      throw new Error("Search filters not found in state or database");
+    if (!searchFiltersVariants || searchFiltersVariants.length === 0) {
+      throw new Error("Search filter variants not found in state or database");
     }
 
-    // ✅ Generate queries for first time
-    const meta = (searchFilters as any)._meta || {};
-    const queries = [];
+    // ✅ STEP 4: Generate tiered queries from each variant
+    console.log(`\n🎯 Generating queries from ${searchFiltersVariants.length} AI variants...\n`);
 
-    // === STRATEGY 1: PRECISE ===
-    queries.push({
-      type: "precise",
-      searchQuery: (searchFilters as any).searchQuery,
-      currentJobTitles: (searchFilters as any).currentJobTitles,
-      locations: (searchFilters as any).locations,
-      industryIds: (searchFilters as any).industryIds,
-      yearsOfExperienceIds: (searchFilters as any).yearsOfExperienceIds,
-      seniorityLevelIds: (searchFilters as any).seniorityLevelIds,
-      maxItems: state.maxCandidates,
-      takePages: (searchFilters as any).takePages,
-    });
+    const queries = generateQueriesFromVariants(searchFiltersVariants, state.maxCandidates);
 
-    // === STRATEGY 2: BROAD ===
-    queries.push({
-      type: "broad",
-      searchQuery: (searchFilters as any).searchQuery,
-      currentJobTitles: (searchFilters as any).currentJobTitles?.slice(0, 3),
-      locations: (searchFilters as any).locations,
-      yearsOfExperienceIds: (searchFilters as any).yearsOfExperienceIds,
-      seniorityLevelIds: (searchFilters as any).seniorityLevelIds,
-      maxItems: state.maxCandidates,
-      takePages: (searchFilters as any).takePages,
-    });
-
-    // === STRATEGY 3: ALTERNATIVE ===
-    if (meta.niceToHaveSkills && meta.niceToHaveSkills.length > 0) {
-      const alternativeQuery = meta.niceToHaveSkills.slice(0, 3).join(" AND ");
-      queries.push({
-        type: "alternative",
-        searchQuery: alternativeQuery,
-        currentJobTitles: (searchFilters as any).currentJobTitles,
-        locations: (searchFilters as any).locations,
-        yearsOfExperienceIds: (searchFilters as any).yearsOfExperienceIds,
-        seniorityLevelIds: (searchFilters as any).seniorityLevelIds,
-        maxItems: state.maxCandidates,
-        takePages: (searchFilters as any).takePages,
-      });
-    }
-
-    console.log(`✅ Generated ${queries.length} search strategies`);
+    console.log(`\n✅ Generated ${queries.length} total queries:`);
+    console.log(`   - ${searchFiltersVariants.length} variants × 3 tiers each`);
+    console.log(`   - Tier 1 (Precise): ${searchFiltersVariants.length} queries`);
+    console.log(`   - Tier 2 (Broad): ${searchFiltersVariants.length} queries`);
+    console.log(`   - Tier 3 (Alternative): ${searchFiltersVariants.length} queries\n`);
 
     await prisma.sourcingJob.update({
       where: { id: state.jobId },
@@ -142,10 +80,8 @@ export async function generateSearchQueries(state: SourcingState) {
     });
 
     return {
-      searchFilters: searchFilters,
+      searchFiltersVariants: searchFiltersVariants,
       searchQueries: queries,
-      currentQueryIndex: 0,
-      searchAttempts: 0,
       currentStage: "QUERY_GENERATED",
     };
   } catch (error: any) {
@@ -172,4 +108,82 @@ export async function generateSearchQueries(state: SourcingState) {
       currentStage: "QUERY_GENERATION_FAILED",
     };
   }
+}
+
+/**
+ * Helper function to generate queries from variants
+ * Creates Tier 1, 2, 3 for each AI variant
+ */
+function generateQueriesFromVariants(variants: any[], maxCandidates: number) {
+  const queries: any = [];
+  let queryId = 0;
+
+  variants.forEach((variant, variantIdx) => {
+    const variantNum = variantIdx + 1;
+
+    console.log(`📋 Variant ${variantNum}: ${variant.variantReasoning || 'AI-generated variant'}`);
+    console.log(`   Query: "${variant.searchQuery}"`);
+    console.log(`   Titles: [${variant.currentJobTitles?.slice(0, 3).join(', ')}]`);
+
+    // === TIER 1: PRECISE (use AI variant as-is with all filters) ===
+    queries.push({
+      tier: 1,
+      type: "precise",
+      variant: variantNum,
+      queryId: queryId++,
+      description: `Variant ${variantNum} - Precise (all filters)`,
+      variantReasoning: variant.variantReasoning,
+      searchQuery: variant.searchQuery,
+      currentJobTitles: variant.currentJobTitles,
+      locations: variant.locations,
+      industryIds: variant.industryIds,
+      yearsOfExperienceIds: variant.yearsOfExperienceIds,
+      seniorityLevelIds: variant.seniorityLevelIds,
+      maxItems: maxCandidates,
+      takePages: variant.takePages || [1, 2, 3]
+    });
+
+    // === TIER 2: BROAD (remove industry filter for wider reach) ===
+    queries.push({
+      tier: 2,
+      type: "broad",
+      variant: variantNum,
+      queryId: queryId++,
+      description: `Variant ${variantNum} - Broad (no industry filter)`,
+      variantReasoning: variant.variantReasoning,
+      searchQuery: variant.searchQuery,
+      currentJobTitles: variant.currentJobTitles?.slice(0, 5) || [],
+      locations: variant.locations,
+      industryIds: [], // ← Removed for broader search
+      yearsOfExperienceIds: variant.yearsOfExperienceIds,
+      seniorityLevelIds: variant.seniorityLevelIds,
+      maxItems: maxCandidates,
+      takePages: variant.takePages || [1, 2, 3]
+    });
+
+    // === TIER 3: ALTERNATIVE (OR logic for maximum reach) ===
+    const altQuery = variant.searchQuery
+      ? variant.searchQuery.replace(/ AND /g, ' OR ')
+      : variant.searchQuery;
+
+    queries.push({
+      tier: 3,
+      type: "alternative",
+      variant: variantNum,
+      queryId: queryId++,
+      description: `Variant ${variantNum} - Alternative (OR logic)`,
+      variantReasoning: variant.variantReasoning,
+      searchQuery: altQuery,
+      currentJobTitles: variant.currentJobTitles,
+      locations: variant.locations,
+      yearsOfExperienceIds: variant.yearsOfExperienceIds,
+      seniorityLevelIds: variant.seniorityLevelIds,
+      maxItems: maxCandidates,
+      takePages: [1, 2, 3, 4] // Search deeper pages
+    });
+
+    console.log(`   ✓ Created 3 tiers for variant ${variantNum}\n`);
+  });
+
+  return queries;
 }

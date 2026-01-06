@@ -16,12 +16,26 @@ export const SourcingStateAnnotation = Annotation.Root({
     reducer: (current, update) => update ?? current,
     default: () => null
   }),
-  
+
+  searchFiltersVariants: Annotation<any[]>({
+    reducer: (current, update) => update ?? current,
+    default: () => []
+  }),
+
   searchQueries: Annotation<any[]>({
     reducer: (current, update) => update ?? current,
     default: () => []
   }),
-  
+
+  // === Query Usage Tracking ===
+  usedQueryIndices: Annotation<Set<number>>({
+    reducer: (current, update) => {
+      if (!update) return current;
+      return new Set([...Array.from(current), ...Array.from(update)]);
+    },
+    default: () => new Set()
+  }),
+
   // === Search Tracking ===
   discoveredUrls: Annotation<Set<string>>({
     reducer: (current, update) => {
