@@ -139,7 +139,7 @@ export const candidateScoreSchema = z.object({
   candidateSummary: z.string().min(150).max(400)
     .describe('Executive summary of the candidate (2-3 sentences). Cover: current role, key strengths, main concern/gap, and fit level. Example: "Senior Frontend Engineer at TechCorp with 6 years React experience. Strong technical foundation with 9/12 required skills. Main gap is backend experience but shows willingness to learn full-stack. Good fit for mid-level full-stack role."'),
   
-  keyStrengths: z.array(z.string()).min(3).max(3)
+  keyStrengths: z.array(z.string()).min(1).max(3)
     .describe('Top 3 compelling reasons to interview this candidate. Be specific with evidence. Each should be 10-20 words. Example: ["Led React migration at scale (5M+ users)", "Strong CS fundamentals from tier-1 university", "Current role closely matches job requirements"]'),
   
   // ============================================

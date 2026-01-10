@@ -23,6 +23,10 @@ import creditsRouter from './routes/credits';
 import plansRouter from './routes/plans';
 import subscriptionsRouter from './routes/subscriptions';
 import webhooksRouter from './routes/webhooks';
+import emailTemplatesRouter from './routes/email-templates';
+import interviewsRouter from './routes/interviews';
+import interviewLinkRouter from './routes/interview-link';
+import vapiWebhookRouter from './routes/vapi-webhook';
 
 const app: Application = express();
 const PORT = process.env.PORT || 8000;
@@ -94,6 +98,8 @@ app.get('/', (req, res) => {
       credits: '/api/credits',
       plans: '/api/plans',
       subscriptions: '/api/subscriptions',
+      emailTemplates: '/api/email-templates',
+      interviews: '/api/interviews',
       upload: '/api/upload',
       export: '/api/export',
       process: '/api/process/:jobId',
@@ -123,7 +129,15 @@ app.use('/api/credits', creditsRouter);
 app.use('/api/plans', plansRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
 
+// Interview System Routes
+app.use('/api/email-templates', emailTemplatesRouter);
+app.use('/api/interviews', interviewsRouter);
+
+// Public Interview Link Routes (no auth - accessed by candidates)
+app.use('/api/interview-link', interviewLinkRouter);
+
 // Webhooks (no auth - verified by signature)
+app.use('/api/webhooks/vapi', vapiWebhookRouter);
 app.use('/api/webhooks', webhooksRouter);
 
 

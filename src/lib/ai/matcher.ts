@@ -63,7 +63,8 @@ export function calculateMatchScore(
       expScore = (candidateExperience / reqExpYears) * 30;
     }
   } else {
-    expScore = 30; // If no specific requirement, give full points
+    // No experience requirement = no points awarded or deducted (neutral)
+    expScore = 0;
   }
 
   const totalScore = Math.round(skillScore + expScore);

@@ -8,15 +8,17 @@ datasource db {
 }
 
 model User {
-  id           String        @id
-  email        String        @unique
-  name         String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  sourcingJobs SourcingJob[]
-  jobs         Job[]
-  userCredits  UserCredits?
-  subscription Subscription?
+  id             String          @id
+  email          String          @unique
+  name           String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  sourcingJobs   SourcingJob[]
+  jobs           Job[]
+  userCredits    UserCredits?
+  subscription   Subscription?
+  emailTemplates EmailTemplate[]
+  interviews     Interview[]
 
   @@map("users")
 }
@@ -37,13 +39,14 @@ model Job {
   candidates         Candidate[]
   user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   processingLogs     ProcessingLog[]
+  interviews         Interview[]
 
   @@index([userId])
   @@map("jobs")
 }
 
 model Candidate {
-  id                   String   @id @default(uuid())
+  id                   String      @id @default(uuid())
   jobId                String
   name                 String
   email                String?
@@ -61,12 +64,13 @@ model Candidate {
   summary              String?
   strengths            String[]
   weaknesses           String[]
-  processingStatus     String   @default("pending")
+  processingStatus     String      @default("pending")
   processingError      String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
   resumePath           String
-  job                  Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job                  Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  interviews           Interview[]
 
   @@index([jobId])
   @@index([matchScore])
@@ -123,6 +127,7 @@ model SourcingJob {
   usedQueryIndices    Json?
   candidates          LinkedInCandidate[]
   user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interviews          Interview[]
 
   @@index([userId, status])
   @@index([lastActivityAt])
@@ -210,6 +215,7 @@ model LinkedInCandidate {
   enrichmentStatus          CandidateEnrichmentStatus @default(PENDING)
   scrapingStatus            String?
   sourcingJob               SourcingJob               @relation(fields: [sourcingJobId], references: [id], onDelete: Cascade)
+  interviews                Interview[]
 
   @@unique([sourcingJobId, profileUrl])
   @@index([sourcingJobId, matchScore(sort: Desc)])
@@ -336,4 +342,126 @@ enum CandidateEnrichmentStatus {
   ENRICHED
   NO_EMAIL_FOUND
   SKIPPED
+}
+
+// ==========================================
+// INTERVIEW SYSTEM
+// ==========================================
+
+model EmailTemplate {
+  id         String            @id @default(cuid())
+  userId     String
+  name       String
+  type       EmailTemplateType
+  subject    String
+  bodyHtml   String            @db.Text
+  bodyText   String?           @db.Text
+  variables  Json              @default("{}")
+  isDefault  Boolean           @default(false)
+  isActive   Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interviews Interview[]
+
+  @@index([userId, type, isDefault])
+  @@map("email_templates")
+}
+
+model Interview {
+  id                    String                @id @default(cuid())
+  userId                String
+
+  // Candidate relations (one of these will be set based on source)
+  candidateId           String?               // For SCREENING source
+  linkedInCandidateId   String?               // For SOURCING source
+
+  // Job relations (one of these will be set based on source)
+  jobId                 String?               // For SCREENING source (links to Job)
+  sourcingJobId         String?               // For SOURCING source (links to SourcingJob)
+
+  source                InterviewSource
+  linkToken             String                @unique
+  interviewLink         String
+  vapiAssistantId       String?
+  vapiCallId            String?
+  emailTemplateId       String?
+  customEmailSubject    String?
+  customEmailBody       String?               @db.Text
+  status                InterviewStatus       @default(PENDING)
+  linkSentAt            DateTime?
+  linkOpenedAt          DateTime?
+  linkExpiresAt         DateTime
+  startedAt             DateTime?
+  completedAt           DateTime?
+  abandonedAt           DateTime?
+  duration              Int?
+  emailSent             Boolean               @default(false)
+  remindersSent         Int                   @default(0)
+  lastReminderAt        DateTime?
+  transcript            String?               @db.Text
+  rawMessages           Json?
+  recordingUrl          String?
+  overallScore          Int?
+  technicalScore        Int?
+  communicationScore    Int?
+  cultureFitScore       Int?
+  strengths             String[]
+  concerns              String[]
+  keyInsights           String?               @db.Text
+  recommendation        HiringRecommendation?
+  detailedAnalysis      Json?
+  abandonedAtQuestion   String?
+  noShowReason          String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  // Relations
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  candidate             Candidate?            @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  linkedInCandidate     LinkedInCandidate?    @relation(fields: [linkedInCandidateId], references: [id], onDelete: Cascade)
+  job                   Job?                  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sourcingJob           SourcingJob?          @relation(fields: [sourcingJobId], references: [id], onDelete: Cascade)
+  emailTemplate         EmailTemplate?        @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([linkToken])
+  @@index([vapiCallId])
+  @@index([candidateId])
+  @@index([linkedInCandidateId])
+  @@index([jobId])
+  @@index([sourcingJobId])
+  @@map("interviews")
+}
+
+enum EmailTemplateType {
+  INTERVIEW_INVITATION
+  REMINDER_24H
+  REMINDER_6H
+  FOLLOW_UP
+  CUSTOM
+}
+
+enum InterviewSource {
+  SCREENING
+  SOURCING
+}
+
+enum InterviewStatus {
+  PENDING
+  LINK_SENT
+  LINK_OPENED
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+  EXPIRED
+  NO_SHOW
+  CANCELLED
+}
+
+enum HiringRecommendation {
+  STRONG_YES
+  YES
+  MAYBE
+  NO
 }
